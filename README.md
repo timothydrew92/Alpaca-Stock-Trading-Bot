@@ -1,6 +1,6 @@
 # Alpaca Stock Trading Bot
 
-This project is an Alpaca stock trading bot built with Python. The bot connects to the Alpaca API to execute trades based on market conditions.
+This project is an Alpaca stock trading bot built with Python. It uses the Alpaca Paper trading system which does not utilize actual money and can be used to test algorithms and code. The bot connects to the Alpaca API to execute trades based on market conditions.
 
 ## Beginning Code
 
