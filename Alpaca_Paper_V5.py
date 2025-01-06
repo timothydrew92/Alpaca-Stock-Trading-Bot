@@ -7,10 +7,14 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Input
+from dotenv import load_dotenv
 
-# Your Alpaca API credentials
-API_KEY = "PK14VXEVLLWLDV6HJDW5"
-API_SECRET = "JRx69m1C9GNTfqUYxVp9150dX8P6zhNDasQ6WfcS"
+# Load environment variables from .env file
+load_dotenv()
+
+# Your Alpaca API credentials from environment variables
+API_KEY = os.getenv("ALPACA_API_KEY")
+API_SECRET = os.getenv("ALPACA_API_SECRET")
 BASE_URL = "https://paper-api.alpaca.markets"  # Use for paper trading
 
 # Initialize Alpaca API
