@@ -15,7 +15,7 @@ import argparse
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,6 +49,7 @@ class Bot:
         if self.state_file.exists():
             self.state |= json.loads(self.state_file.read_text())
         self.watchlist_file = ROOT / "state" / "watchlist.json"
+        self.summary_day: date | None = None
         self.levels: dict[str, dict] = {}
         self.levels_day: date | None = None
         self.tradable: set[str] = set()
@@ -132,6 +133,8 @@ class Bot:
         if not symbols:
             return {}
         now, fresh = datetime.now(timezone.utc), {}
+        # Ignore trades from before today's 9:30 open: pre-market prints are thin and misleading.
+        session_open = datetime.combine(today_ny(), dtime(9, 30), NEW_YORK)
         for feed, max_age in ((DataFeed.IEX, timedelta(minutes=3)), (DataFeed.DELAYED_SIP, timedelta(minutes=25))):
             missing = [s for s in symbols if s not in fresh]
             if not missing:
@@ -142,11 +145,11 @@ class Bot:
                 log.warning("Price feed %s failed: %s", feed.value, error)
                 continue
             for symbol, trade in trades.items():
-                if now - trade.timestamp <= max_age:
+                if now - trade.timestamp <= max_age and trade.timestamp >= session_open:
                     fresh[symbol] = float(trade.price)
-        for symbol in symbols:
-            if symbol not in fresh:
-                log.warning("%s: no recent price, skipping this pass", symbol)
+        missing = [s for s in symbols if s not in fresh]
+        if missing and now - session_open > timedelta(minutes=20):  # expected right after the open
+            log.warning("No recent price for %s; skipping them this pass", ", ".join(missing))
         return fresh
 
     # ---------- account rules ----------
@@ -255,6 +258,7 @@ class Bot:
         positions = self.state["positions"]
         price = self.prices(sorted(self.tradable | set(positions)))
         today = today_ny().isoformat()
+        self.daily_summary(price)
 
         # Exits first.
         for symbol, pos in list(positions.items()):
@@ -303,6 +307,21 @@ class Bot:
             self.submit(symbol, OrderSide.BUY, notional=size, reason=f"dip to ${now:.2f}")
             cash -= size
         self.settle_pending(wait_seconds=20)
+
+    def daily_summary(self, price: dict[str, float]):
+        """One line per day so a quiet day is visibly quiet, not silent."""
+        if self.summary_day == today_ny() or len(price) < len(self.tradable) / 2:
+            return
+        self.summary_day = today_ny()
+        gaps = []
+        for symbol in self.watchlist():
+            lv = self.levels.get(symbol)
+            if lv and symbol in price and strategy.trend_ok(lv["prev_close"], lv["trend_avg"], self.s):
+                gaps.append((price[symbol] / strategy.entry_level(lv["prev_low"], self.s) - 1, symbol))
+        gaps.sort()
+        nearest = ", ".join(f"{s} {g:+.1%}" for g, s in gaps[:4]) or "none"
+        log.info("Today: watching %d stocks, %d in an uptrend, holding %d. Closest to a buy level "
+                 "(distance above it): %s", len(self.watchlist()), len(gaps), len(self.state["positions"]), nearest)
 
     # ---------- commands ----------
 
