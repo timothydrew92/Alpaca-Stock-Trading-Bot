@@ -66,6 +66,16 @@ cd swingbot
 
 The bot then starts on boot and restarts itself after a crash. Run only one copy of the bot per account: stop the one on your Mac before starting the Pi.
 
+## Getting alerted if the bot stops
+
+The bot can ping a "heartbeat" monitor every few minutes; the monitor alerts you when the pings stop (computer asleep, crash, no internet, or repeated errors). Create a heartbeat check at a service such as [Healthchecks.io](https://healthchecks.io) (free) or UptimeRobot (heartbeat monitors), set it to expect a ping every 5 minutes with a 10-minute grace period, and add its URL as a new line in `.env.paper` and/or `.env.live`:
+
+```
+HEARTBEAT_URL=https://...
+```
+
+Then restart the bot. Pings are sent around the clock, including while the market is closed.
+
 ## Which stocks it watches
 
 Once a week, while the market is closed, the bot scans every stock Alpaca can trade in fractions (about 3,900) using free daily prices and keeps the top 15 that are:

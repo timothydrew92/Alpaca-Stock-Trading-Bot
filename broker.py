@@ -28,3 +28,10 @@ def trading_client(mode: str) -> TradingClient:
 def data_client(mode: str = "paper") -> StockHistoricalDataClient:
     key, secret = load_keys(mode)
     return StockHistoricalDataClient(key, secret)
+
+
+def heartbeat_url(mode: str) -> str | None:
+    """Optional HEARTBEAT_URL from the env file: a private address the bot pings so an
+    uptime monitor can alert you when the pings stop."""
+    url = (dotenv_values(ROOT / f".env.{mode}").get("HEARTBEAT_URL") or "").strip()
+    return url if url.startswith("https://") else None

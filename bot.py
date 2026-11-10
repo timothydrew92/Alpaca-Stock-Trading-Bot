@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import time
+import urllib.request
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -26,7 +27,7 @@ from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 
 import screen
 import strategy
-from broker import ROOT, data_client, trading_client
+from broker import ROOT, data_client, heartbeat_url, trading_client
 from config import EXCLUDE, MY_PICKS, SCREEN, SETTINGS
 from marketdata import average_range, fetch_daily_bars
 
@@ -49,6 +50,8 @@ class Bot:
         if self.state_file.exists():
             self.state |= json.loads(self.state_file.read_text())
         self.watchlist_file = ROOT / "state" / "watchlist.json"
+        self.heartbeat = heartbeat_url(mode)
+        self.announced_open = None
         self.summary_day: date | None = None
         self.account_holds: set[str] = set()
         self.levels: dict[str, dict] = {}
@@ -327,6 +330,15 @@ class Bot:
         log.info("Today: watching %d stocks, %d in an uptrend, holding %d. Closest to a buy level "
                  "(distance above it): %s", len(self.watchlist()), len(gaps), len(self.state["positions"]), nearest)
 
+    def beat(self):
+        """Tell the uptime monitor the bot is alive and its last pass worked."""
+        if not self.heartbeat or self.dry_run:
+            return
+        try:
+            urllib.request.urlopen(self.heartbeat, timeout=10).close()
+        except Exception as error:
+            log.warning("Could not reach the uptime monitor: %s", error)
+
     # ---------- commands ----------
 
     def status(self):
@@ -374,11 +386,16 @@ class Bot:
                     continue
                 if clock.is_open:
                     self.run_once()
+                    self.beat()
                     time.sleep(self.s.poll_seconds)
                 else:
+                    if self.announced_open != clock.next_open:
+                        self.announced_open = clock.next_open
+                        log.info("Market closed. Next open %s.",
+                                 clock.next_open.astimezone(NEW_YORK).strftime("%a %b %d %H:%M ET"))
+                    self.beat()
                     wait = (clock.next_open - clock.timestamp).total_seconds()
-                    log.info("Market closed. Next open %s.", clock.next_open.astimezone(NEW_YORK).strftime("%a %b %d %H:%M ET"))
-                    time.sleep(max(60, min(wait, 1800)))
+                    time.sleep(max(30, min(wait, 300)))
             except KeyboardInterrupt:
                 log.info("Stopped by user. Positions are NOT sold and NOT protected while the bot is off.")
                 return
