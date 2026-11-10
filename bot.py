@@ -50,6 +50,7 @@ class Bot:
             self.state |= json.loads(self.state_file.read_text())
         self.watchlist_file = ROOT / "state" / "watchlist.json"
         self.summary_day: date | None = None
+        self.account_holds: set[str] = set()
         self.levels: dict[str, dict] = {}
         self.levels_day: date | None = None
         self.tradable: set[str] = set()
@@ -237,6 +238,7 @@ class Bot:
     def reconcile(self):
         """If shares the bot thinks it holds are gone from the account, trust the account."""
         held = {p.symbol: float(p.qty) for p in self.trading.get_all_positions()}
+        self.account_holds = set(held)
         for symbol, pos in list(self.state["positions"].items()):
             actual = held.get(symbol, 0.0)
             if actual < pos["qty"] - 1e-6:
@@ -291,6 +293,8 @@ class Bot:
                 break
             if symbol not in self.tradable or symbol in positions or symbol in busy or symbol not in price:
                 continue
+            if symbol in self.account_holds:
+                continue  # already in the account from somewhere else; never double up
             if self.state["last_sold"].get(symbol) == today:
                 continue
             if self.state["blocked_until"].get(symbol, "") > today:
@@ -390,6 +394,7 @@ def main():
     parser.add_argument("--once", action="store_true", help="run a single pass and exit")
     parser.add_argument("--status", action="store_true", help="show account and bot positions, then exit")
     parser.add_argument("--close-all", action="store_true", help="sell everything the bot holds, then exit")
+    parser.add_argument("--confirm", metavar="LIVE", help="skip the live prompt (used by the background service)")
     args = parser.parse_args()
     mode = "live" if args.live else "paper"
 
@@ -402,7 +407,8 @@ def main():
     if args.status:
         return bot.status()
     if mode == "live" and not args.dry_run:
-        answer = input(f"This will trade REAL money (up to ${SETTINGS.budget:.0f}). Type LIVE to continue: ")
+        answer = args.confirm or input(
+            f"This will trade REAL money (up to ${SETTINGS.budget:.0f}). Type LIVE to continue: ")
         if answer.strip() != "LIVE":
             raise SystemExit("Cancelled.")
     if args.close_all:

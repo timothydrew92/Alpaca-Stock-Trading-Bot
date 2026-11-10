@@ -41,6 +41,31 @@ APCA_API_SECRET_KEY=your-live-secret
 
 Add `--live` to `--status` or `--close-all` to use the real account.
 
+## Running it on a Raspberry Pi
+
+The bot only works while the computer running it is on, so an always-on Pi suits it. You need Raspberry Pi OS "Bookworm" or newer (Python 3.10+) and at least 1 GB of memory.
+
+On the Pi:
+
+```bash
+git clone https://github.com/timothydrew92/Alpaca-Stock-Trading-Bot.git swingbot
+```
+
+On your Mac, from this folder, copy the key files across (replace `pi@raspberrypi.local` with your Pi's login):
+
+```bash
+scp .env.paper .env.live pi@raspberrypi.local:swingbot/
+```
+
+Back on the Pi:
+
+```bash
+cd swingbot
+./deploy/install_pi.sh        # paper; use "./deploy/install_pi.sh live" for real money
+```
+
+The bot then starts on boot and restarts itself after a crash. Run only one copy of the bot per account: stop the one on your Mac before starting the Pi.
+
 ## Which stocks it watches
 
 Once a week, while the market is closed, the bot scans every stock Alpaca can trade in fractions (about 3,900) using free daily prices and keeps the top 15 that are:
