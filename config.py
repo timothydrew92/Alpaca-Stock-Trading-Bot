@@ -3,8 +3,27 @@ so a number changed here changes both."""
 
 from dataclasses import dataclass
 
-# Stocks the bot is allowed to trade.
-WATCHLIST = ["IONQ", "RGTI", "LUNR", "RKLB", "SMR", "SMCI", "SPCE", "ASTS", "TTD", "NVDA"]
+# Stocks you want the bot to watch no matter what the screener says, e.g. ["RKLB", "NVDA"].
+# They still have to pass the buy rules (uptrend + dip) before the bot buys them.
+MY_PICKS: list[str] = []
+
+# Stocks the bot must never buy, even if the screener finds them.
+EXCLUDE: list[str] = []
+
+
+@dataclass(frozen=True)
+class ScreenSettings:
+    """How the bot finds its own stocks. See screen.py."""
+    size: int = 15                         # How many screened stocks to watch at once.
+    refresh_days: int = 7                  # Re-run the screen this often.
+    min_dollar_volume: float = 50_000_000  # Average dollars traded per day.
+    min_price: float = 5.0                 # Skip stocks cheaper than this.
+    min_daily_move: float = 0.025          # Typical daily move must be at least 2.5%...
+    max_daily_move: float = 0.08           # ...and no more than 8%.
+    avoid_drug_developers: bool = True     # Skip biotech/pharma names (overnight trial-result risk).
+
+
+SCREEN = ScreenSettings()
 
 
 @dataclass(frozen=True)

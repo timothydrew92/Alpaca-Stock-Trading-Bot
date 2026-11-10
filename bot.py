@@ -6,8 +6,9 @@
     .venv/bin/python bot.py --live            # run with REAL money (asks you to type LIVE first)
     .venv/bin/python bot.py --close-all       # sell everything the bot holds, then exit
 
-Rules live in strategy.py, numbers in config.py. The bot only ever sells shares it
-bought itself (tracked in state/<mode>.json); anything else in the account is left alone.
+Rules live in strategy.py, numbers in config.py. Once a week the bot rebuilds its own
+watchlist with screen.py and adds any stocks you list in MY_PICKS. It only ever sells
+shares it bought itself (tracked in state/<mode>.json); anything else is left alone.
 """
 
 import argparse
@@ -23,13 +24,13 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 
+import screen
 import strategy
-from backtest import average_range, fetch_daily_bars
 from broker import ROOT, data_client, trading_client
-from config import SETTINGS, WATCHLIST
+from config import EXCLUDE, MY_PICKS, SCREEN, SETTINGS
+from marketdata import average_range, fetch_daily_bars
 
 NEW_YORK = ZoneInfo("America/New_York")
-STALE_PRICE = timedelta(minutes=15)
 DONE = {OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED}
 log = logging.getLogger("bot")
 
@@ -47,6 +48,7 @@ class Bot:
         self.state = {"positions": {}, "pending": {}, "realized": 0.0, "blocked_until": {}, "last_sold": {}}
         if self.state_file.exists():
             self.state |= json.loads(self.state_file.read_text())
+        self.watchlist_file = ROOT / "state" / "watchlist.json"
         self.levels: dict[str, dict] = {}
         self.levels_day: date | None = None
         self.tradable: set[str] = set()
@@ -61,6 +63,36 @@ class Bot:
         tmp.write_text(json.dumps(self.state, indent=2))
         tmp.replace(self.state_file)
 
+    # ---------- watchlist ----------
+
+    def screened(self) -> dict:
+        if self.watchlist_file.exists():
+            return json.loads(self.watchlist_file.read_text())
+        return {"date": None, "symbols": []}
+
+    def watchlist(self) -> list[str]:
+        """Your picks first, then the screener's list."""
+        picks = [s.upper() for s in MY_PICKS]
+        skip = {s.upper() for s in EXCLUDE}
+        return [s for s in picks + [s for s in self.screened()["symbols"] if s not in picks] if s not in skip]
+
+    def watchlist_age_days(self) -> float:
+        made = self.screened()["date"]
+        return float("inf") if made is None else (today_ny() - date.fromisoformat(made)).days
+
+    def refresh_watchlist(self):
+        """Re-run the screen. Takes a few minutes, so it normally runs while the market is closed."""
+        log.info("Rebuilding the watchlist (scanning all stocks, a few minutes)...")
+        old = set(self.screened()["symbols"])
+        symbols = screen.auto_watchlist()
+        self.watchlist_file.parent.mkdir(exist_ok=True)
+        self.watchlist_file.write_text(json.dumps({"date": today_ny().isoformat(), "symbols": symbols}, indent=2))
+        self.levels_day = None
+        added, dropped = [s for s in symbols if s not in old], sorted(old - set(symbols))
+        log.info("Watchlist: %s", ", ".join(self.watchlist()))
+        if old:
+            log.info("New this week: %s. Dropped: %s.", ", ".join(added) or "none", ", ".join(dropped) or "none")
+
     # ---------- market data ----------
 
     def refresh_levels(self):
@@ -68,7 +100,7 @@ class Bot:
         today = today_ny()
         if self.levels_day == today:
             return
-        bars = fetch_daily_bars(WATCHLIST, 150)
+        bars = fetch_daily_bars(self.watchlist(), 150)
         levels = {}
         for symbol, df in bars.items():
             atr_series = average_range(df)
@@ -94,17 +126,27 @@ class Bot:
         log.info("Levels refreshed for %s: %d stocks usable", today, len(self.tradable))
 
     def prices(self, symbols: list[str]) -> dict[str, float]:
-        """Latest trade per stock; a stock whose last trade is old is left out."""
+        """Latest trade per stock. The free live feed (IEX) sees only part of the market, so
+        when its last trade is old we fall back to the full-market feed, which runs 15 minutes
+        behind. A stock with no usable price is left out of this pass."""
         if not symbols:
             return {}
-        trades = self.data.get_stock_latest_trade(
-            StockLatestTradeRequest(symbol_or_symbols=symbols, feed=DataFeed.IEX))
         now, fresh = datetime.now(timezone.utc), {}
-        for symbol, trade in trades.items():
-            if now - trade.timestamp <= STALE_PRICE:
-                fresh[symbol] = float(trade.price)
-            else:
-                log.warning("%s: last price is %s old, skipping this pass", symbol, now - trade.timestamp)
+        for feed, max_age in ((DataFeed.IEX, timedelta(minutes=3)), (DataFeed.DELAYED_SIP, timedelta(minutes=25))):
+            missing = [s for s in symbols if s not in fresh]
+            if not missing:
+                break
+            try:
+                trades = self.data.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=missing, feed=feed))
+            except Exception as error:
+                log.warning("Price feed %s failed: %s", feed.value, error)
+                continue
+            for symbol, trade in trades.items():
+                if now - trade.timestamp <= max_age:
+                    fresh[symbol] = float(trade.price)
+        for symbol in symbols:
+            if symbol not in fresh:
+                log.warning("%s: no recent price, skipping this pass", symbol)
         return fresh
 
     # ---------- account rules ----------
@@ -116,8 +158,10 @@ class Bot:
         account = self.trading.get_account()
         if account.trading_blocked or account.account_blocked:
             raise RuntimeError("Alpaca reports this account is blocked from trading")
-        # The paper account carries old margin positions, so its cash figure is not meaningful.
-        funds = float(account.buying_power if self.mode == "paper" else account.cash)
+        funds = float(account.cash)
+        if self.mode == "paper" and funds < 0:
+            # A paper account already borrowing on margin has no meaningful cash figure.
+            funds = float(account.buying_power)
         if self.s.settled_cash_only:
             fills = self.trading.get("/account/activities/FILL", {"date": today_ny().isoformat()})
             unsettled = sum(float(f["qty"]) * float(f["price"]) for f in fills if f["side"].startswith("sell"))
@@ -126,7 +170,7 @@ class Bot:
         return min(funds, self.s.budget - invested)
 
     def symbols_with_open_orders(self) -> set[str]:
-        orders = self.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=WATCHLIST))
+        orders = self.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500))
         return {o.symbol for o in orders}
 
     # ---------- orders ----------
@@ -238,7 +282,7 @@ class Bot:
         except Exception as error:
             log.error("Could not confirm settled cash, so not buying this pass: %s", error)
             return
-        for symbol in WATCHLIST:
+        for symbol in self.watchlist():
             if len(positions) + sum(1 for p in self.state["pending"].values() if p["side"] == "buy") >= self.s.max_positions:
                 break
             if symbol not in self.tradable or symbol in positions or symbol in busy or symbol not in price:
@@ -278,6 +322,8 @@ class Bot:
                 gain = "" if now is None else f", now ${now:.2f} ({(now / pos['entry'] - 1):+.1%})"
                 print(f"  {symbol}: {pos['qty']:.4f} shares bought {pos['bought']} at ${pos['entry']:.2f}{gain}, "
                       f"sells at or below ${stop:.2f}")
+        made = self.screened()["date"]
+        print(f"Watching ({'screened ' + made if made else 'no screen yet'}): {', '.join(self.watchlist()) or 'nothing'}")
         blocked = {s: d for s, d in self.state["blocked_until"].items() if d > today_ny().isoformat()}
         if blocked:
             print("Not rebuying after a loss until:", ", ".join(f"{s} {d}" for s, d in blocked.items()))
@@ -298,6 +344,11 @@ class Bot:
         while True:
             try:
                 clock = self.trading.get_clock()
+                age = self.watchlist_age_days()
+                # Rebuild weekly while the market is closed; during market hours only if badly overdue.
+                if age >= SCREEN.refresh_days and (not clock.is_open or age >= 2 * SCREEN.refresh_days):
+                    self.refresh_watchlist()
+                    continue
                 if clock.is_open:
                     self.run_once()
                     time.sleep(self.s.poll_seconds)
@@ -338,8 +389,10 @@ def main():
     if args.close_all:
         return bot.close_all()
     if args.once:
+        if bot.watchlist_age_days() >= SCREEN.refresh_days:
+            bot.refresh_watchlist()
         if not bot.trading.get_clock().is_open:
-            raise SystemExit("Market is closed; nothing to do.")
+            raise SystemExit("Market is closed; nothing to trade right now.")
         return bot.run_once()
     bot.run_forever()
 

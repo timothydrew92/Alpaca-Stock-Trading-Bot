@@ -1,6 +1,6 @@
 # Alpaca Swing Bot
 
-A small Python bot for [Alpaca](https://alpaca.markets) that buys dips in stocks that are trending up, cuts losing positions quickly, and lets winning ones run. It is built to be tried with a small amount of money (default budget: $100) and has a paper-trading mode and a backtest.
+A small Python bot for [Alpaca](https://alpaca.markets) that finds its own stocks each week, buys dips in the ones trending up, cuts losing positions quickly, and lets winning ones run. It is built to be tried with a small amount of money (default budget: $100) and has a paper-trading mode and a backtest.
 
 This is a personal experiment, not financial advice. The backtest does not show a reliable edge, and you can lose money.
 
@@ -29,9 +29,10 @@ APCA_API_SECRET_KEY=your-live-secret
 
 | Command | What it does |
 |---|---|
-| `.venv/bin/python backtest.py` | Replays the rules over the last two years |
-| `.venv/bin/python backtest.py --compare` | Same, next to other rule variants and buy-and-hold |
-| `.venv/bin/python screen.py` | Scans all fractionable stocks and lists watchlist candidates (prints only) |
+| `.venv/bin/python backtest.py` | Replays the rules over the last two years, rebuilding the watchlist weekly |
+| `.venv/bin/python backtest.py --compare` | Same, next to other rule variants and the S&P 500 |
+| `.venv/bin/python backtest.py --symbols NVDA RKLB` | Tests a fixed list of stocks instead |
+| `.venv/bin/python screen.py` | Shows the watchlist the bot would build today |
 | `.venv/bin/python bot.py --status` | Shows the paper account and what the bot holds |
 | `.venv/bin/python bot.py --dry-run --once` | One pass that prints decisions and places no orders |
 | `.venv/bin/python bot.py` | Runs on the paper account until you press Ctrl+C |
@@ -40,11 +41,25 @@ APCA_API_SECRET_KEY=your-live-secret
 
 Add `--live` to `--status` or `--close-all` to use the real account.
 
+## Which stocks it watches
+
+Once a week, while the market is closed, the bot scans every stock Alpaca can trade in fractions (about 3,900) using free daily prices and keeps the top 15 that are:
+
+- liquid: at least $50M traded per day
+- priced at $5 or more
+- in an uptrend: above the 50-day average, which is above the 200-day average
+- moving 2.5% to 8% on a typical day
+- not an obvious drug developer (a name-based filter that misses some)
+
+ranked by 6-month price gain. Thresholds are under `SCREEN` in [config.py](config.py).
+
+To add your own stocks, list them in `MY_PICKS` in [config.py](config.py). To ban a stock, list it in `EXCLUDE`. Your picks still have to pass the buy rules below. A stock the bot already holds keeps its stop even after it drops off the list.
+
 ## The rules
 
 All numbers are in [config.py](config.py); the logic is in [strategy.py](strategy.py) and is shared by the bot and the backtest.
 
-**Buy** a stock from the watchlist when all of these are true:
+**Buy** a watched stock when all of these are true:
 - Its price is 1% or more below yesterday's low.
 - Yesterday's close was above its 50-day average (it is in an uptrend).
 - The bot holds fewer than 4 stocks and has settled cash available.
@@ -67,5 +82,5 @@ All numbers are in [config.py](config.py); the logic is in [strategy.py](strateg
 
 - The stop only works while the bot is running. If the bot is off, nothing sells.
 - A stock can open far below the stop (after bad news overnight). The sale then happens at the open, and the loss is larger than $2.
-- Prices come from Alpaca's free IEX feed, which can differ slightly from the full market.
-- The backtest uses daily bars and a short, unusual period for these stocks. Treat its results as a sanity check, not a forecast.
+- Prices come from Alpaca's free feeds. When the live one has no recent trade for a stock, the bot uses the full-market feed, which runs 15 minutes behind.
+- The backtest uses daily bars, two years of history, and only stocks that are still listed today. Its results swing widely with small setting changes and have not beaten simply holding an S&P 500 fund by a meaningful margin. Treat it as a sanity check, not a forecast.

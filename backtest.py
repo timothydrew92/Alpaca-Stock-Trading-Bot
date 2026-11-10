@@ -1,66 +1,35 @@
-"""Replays the rules in strategy.py over past daily prices.
+"""Replays the bot's rules over past daily prices.
 
-    .venv/bin/python backtest.py              # last 2 years, settings from config.py
+    .venv/bin/python backtest.py                # last 2 years
     .venv/bin/python backtest.py --years 1
-    .venv/bin/python backtest.py --compare    # also show the old bot's rule and other variants
+    .venv/bin/python backtest.py --compare      # also show other rule variants
+    .venv/bin/python backtest.py --trades       # list every trade
+    .venv/bin/python backtest.py --symbols IONQ RGTI NVDA   # test a fixed list instead
 
-Assumptions, all leaning pessimistic:
+By default the watchlist is rebuilt every week exactly as the bot does it, using only
+prices that existed at that point, so the test cannot pick stocks with hindsight.
+
+Assumptions, mostly leaning pessimistic:
   * Daily bars only. If a day's range touches both a stop and a profit target, the stop is assumed first.
   * If the price opens beyond a level (a gap), the fill is at the open, not the level.
   * 0.1% is lost to slippage on every buy and every sell.
   * Sale proceeds cannot be spent until the next trading day.
+One assumption leans optimistic: only stocks still listed today are scanned, so
+companies that went bust or were delisted along the way are missing.
 """
 
 import argparse
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pandas as pd
-from alpaca.data.enums import Adjustment, DataFeed
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
 
+import screen
 import strategy
-from broker import data_client
-from config import SETTINGS, WATCHLIST, Settings
+from config import MY_PICKS, SCREEN, SETTINGS, Settings
+from marketdata import average_range, fetch_daily_bars, fetch_many
 
 SLIPPAGE = 0.001
-
-
-def fetch_daily_bars(symbols: list[str], days: int,
-                     columns: tuple[str, ...] = ("open", "high", "low", "close")) -> dict[str, pd.DataFrame]:
-    """Daily bars per symbol, split-adjusted, oldest first."""
-    end = datetime.now(timezone.utc) - timedelta(minutes=20)
-    start = end - timedelta(days=days)
-    client = data_client()
-    last_error = None
-    for feed in (DataFeed.SIP, DataFeed.IEX):
-        try:
-            request = StockBarsRequest(
-                symbol_or_symbols=symbols, timeframe=TimeFrame.Day, start=start, end=end,
-                adjustment=Adjustment.SPLIT, feed=feed,
-            )
-            frame = client.get_stock_bars(request).df
-            break
-        except Exception as error:  # the free plan may refuse one feed; try the other
-            last_error = error
-    else:
-        raise SystemExit(f"Could not download prices: {last_error}")
-    bars = {}
-    for symbol in symbols:
-        if symbol in frame.index.get_level_values(0):
-            one = frame.xs(symbol, level=0)[list(columns)].copy()
-            one.index = pd.to_datetime(one.index).tz_convert("America/New_York").normalize().tz_localize(None)
-            bars[symbol] = one
-    return bars
-
-
-def average_range(df: pd.DataFrame, days: int = 14) -> pd.Series:
-    """Average true range: the stock's typical daily move in dollars."""
-    prev_close = df["close"].shift(1)
-    true_range = pd.concat([df["high"] - df["low"], (df["high"] - prev_close).abs(),
-                            (df["low"] - prev_close).abs()], axis=1).max(axis=1)
-    return true_range.rolling(days).mean()
 
 
 @dataclass
@@ -78,9 +47,15 @@ class Trade:
         return self.dollars * (self.exit / self.entry - 1)
 
 
-def run(bars: dict[str, pd.DataFrame], s: Settings, start: pd.Timestamp, legacy_exit: bool = False):
-    """Returns (equity curve, list of trades). legacy_exit reproduces the old bot:
-    sell at 1% above yesterday's high and never cut a loss."""
+def run(bars: dict[str, pd.DataFrame], s: Settings, start: pd.Timestamp,
+        watchlists: dict[pd.Timestamp, list[str]], legacy_exit: bool = False):
+    """Returns (equity curve, list of trades). `watchlists` maps a date to the list
+    in force from that date on. legacy_exit reproduces the old bot: sell at 1% above
+    yesterday's high and never cut a loss."""
+    used = {sym for symbols in watchlists.values() for sym in symbols}
+    bars = {sym: df for sym, df in bars.items() if sym in used}
+    changes = sorted(watchlists)
+    watchlist: list[str] = []
     atrs = {sym: average_range(df) for sym, df in bars.items()}
     trend = {sym: df["close"].rolling(s.trend_days).mean() if s.trend_days > 0 else None for sym, df in bars.items()}
     days = sorted({d for df in bars.values() for d in df.index if d >= start})
@@ -93,6 +68,8 @@ def run(bars: dict[str, pd.DataFrame], s: Settings, start: pd.Timestamp, legacy_
 
     for day in days:
         unsettled = 0.0  # proceeds from today's sells; spendable tomorrow
+        while changes and changes[0] <= day:
+            watchlist = watchlists[changes.pop(0)]
 
         def sell(symbol: str, price: float, reason: str):
             nonlocal cash, unsettled, realized
@@ -130,7 +107,7 @@ def run(bars: dict[str, pd.DataFrame], s: Settings, start: pd.Timestamp, legacy_
                 pos["peak"] = max(pos["peak"], bar["high"])
 
         # 2. Entries.
-        for symbol in WATCHLIST:
+        for symbol in watchlist:
             df = bars.get(symbol)
             if df is None or day not in df.index or symbol in holding:
                 continue
@@ -178,12 +155,23 @@ def run(bars: dict[str, pd.DataFrame], s: Settings, start: pd.Timestamp, legacy_
     return pd.Series(dict(curve)), trades
 
 
-def buy_and_hold(bars: dict[str, pd.DataFrame], budget: float, start: pd.Timestamp) -> pd.Series:
-    """Budget split evenly across the watchlist on day one and never touched."""
-    closes = pd.DataFrame({sym: df["close"] for sym, df in bars.items()})
+def buy_and_hold(bars: dict[str, pd.DataFrame], symbols: list[str], budget: float, start: pd.Timestamp) -> pd.Series:
+    """Budget split evenly across the given stocks on day one and never touched."""
+    closes = pd.DataFrame({sym: bars[sym]["close"] for sym in symbols if sym in bars})
     closes = closes[closes.index >= start].ffill().dropna(axis=1, how="all")
     first = closes.bfill().iloc[0]
     return (closes / first).mean(axis=1) * budget
+
+
+def weekly_watchlists(bars: dict[str, pd.DataFrame], names: dict[str, str], start: pd.Timestamp) -> dict:
+    """The screener's list as it would have been at the start of each week."""
+    m = screen.measures(bars)
+    days = [d for d in m["price"].index if d >= start]
+    lists = {}
+    for day in days[::5]:
+        ranked = screen.ranking(m, names, SCREEN, before=day)
+        lists[day] = MY_PICKS + [s for s in ranked.head(SCREEN.size).index if s not in MY_PICKS]
+    return lists
 
 
 def summarize(name: str, curve: pd.Series, trades: list[Trade] | None, budget: float) -> dict:
@@ -204,49 +192,75 @@ def summarize(name: str, curve: pd.Series, trades: list[Trade] | None, budget: f
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--years", type=float, default=2.0)
-    parser.add_argument("--compare", action="store_true", help="also test the old bot's rule and other variants")
+    parser.add_argument("--compare", action="store_true", help="also test other rule variants")
     parser.add_argument("--trades", action="store_true", help="list every trade for the config.py settings")
+    parser.add_argument("--symbols", nargs="+", metavar="SYM", help="test this fixed list instead of the weekly screen")
     args = parser.parse_args()
 
-    test_days = int(args.years * 365)
-    bars = fetch_daily_bars(WATCHLIST, test_days + 120)  # extra history warms up the trend average
-    start = pd.Timestamp(datetime.now().date() - timedelta(days=test_days))
-    missing = [s for s in WATCHLIST if s not in bars]
-    if missing:
-        print("No price data for:", ", ".join(missing))
-
     s = SETTINGS
-    curve, trades = run(bars, s, start)
+    test_days = int(args.years * 365)
+    start = pd.Timestamp(datetime.now().date() - timedelta(days=test_days))
+    market = fetch_daily_bars(["SPY"], test_days + 10)
+
+    if args.symbols:
+        symbols = [x.upper() for x in args.symbols]
+        bars = fetch_daily_bars(symbols, test_days + 120)  # extra history warms up the averages
+        missing = [x for x in symbols if x not in bars]
+        if missing:
+            print("No price data for:", ", ".join(missing))
+        watchlists = {start: symbols}
+        label = "fixed list: " + " ".join(symbols)
+    else:
+        names = screen.universe()
+        load_days = max(test_days, 730) + 420  # one size for most runs, so the day's download is reused
+        print(f"Loading {load_days} days of prices for {len(names)} stocks "
+              "(several minutes the first time each day)...")
+        bars = fetch_many(sorted(names), load_days, progress=True)
+        watchlists = weekly_watchlists(bars, names, start)
+        label = f"weekly screen, top {SCREEN.size}"
+
+    curve, trades = run(bars, s, start, watchlists)
     rows = [summarize("config.py settings", curve, trades, s.budget)]
 
     if args.compare:
         variants = {
-            "old bot (no stop, no filter)": (replace(s, trend_days=0, loss_cooldown_days=0, risk_per_trade=0), True),
-            "fixed 8% stop, 5% trail, $25 each": (replace(s, atr_mult=0, risk_per_trade=0), False),
-            "volatility stop 2x": (replace(s, atr_mult=2.0), False),
-            "volatility stop 4x": (replace(s, atr_mult=4.0), False),
-            "no trend filter": (replace(s, trend_days=0), False),
-            "no loss cooldown": (replace(s, loss_cooldown_days=0), False),
-            "fixed +10% profit target": (replace(s, take_profit_pct=0.10), False),
-            "deeper dip (3% under low)": (replace(s, dip_pct=0.03), False),
-            "full $25 positions (no risk sizing)": (replace(s, risk_per_trade=0), False),
+            "fixed 8% stop, 5% trail, $25 each": replace(s, atr_mult=0, risk_per_trade=0),
+            "volatility stop 2x": replace(s, atr_mult=2.0),
+            "volatility stop 4x": replace(s, atr_mult=4.0),
+            "no trend filter": replace(s, trend_days=0),
+            "no loss cooldown": replace(s, loss_cooldown_days=0),
+            "fixed +10% profit target": replace(s, take_profit_pct=0.10),
+            "deeper dip (3% under low)": replace(s, dip_pct=0.03),
+            "full $25 positions (no risk sizing)": replace(s, risk_per_trade=0),
+            "no loss limit": replace(s, max_total_loss=1e9),
         }
-        for name, (variant, legacy) in variants.items():
-            c, t = run(bars, variant, start, legacy_exit=legacy)
+        for name, variant in variants.items():
+            c, t = run(bars, variant, start, watchlists)
             rows.append(summarize(name, c, t, s.budget))
-    rows.append(summarize("buy and hold the watchlist", buy_and_hold(bars, s.budget, start), None, s.budget))
+        if args.symbols:
+            old = replace(s, trend_days=0, loss_cooldown_days=0, risk_per_trade=0)
+            c, t = run(bars, old, start, watchlists, legacy_exit=True)
+            rows.append(summarize("2024 bot (no stop, no filter)", c, t, s.budget))
+    if args.symbols:
+        rows.append(summarize("buy and hold this list", buy_and_hold(bars, symbols, s.budget, start), None, s.budget))
+    rows.append(summarize("buy and hold S&P 500 (SPY)", buy_and_hold(market, ["SPY"], s.budget, start), None, s.budget))
 
-    print(f"\nBacktest {curve.index[0].date()} to {curve.index[-1].date()}, starting with ${s.budget:.0f}\n")
+    print(f"\nBacktest {curve.index[0].date()} to {curve.index[-1].date()}, starting with ${s.budget:.0f} ({label})\n")
     print(pd.DataFrame(rows).astype(object).fillna("").to_string(index=False))
 
+    if not args.symbols:
+        ever = {sym for symbols in watchlists.values() for sym in symbols}
+        print(f"\n{len(ever)} different stocks appeared on the weekly list; {len({t.symbol for t in trades})} were traded.")
     if args.trades:
         print("\nTrades (config.py settings):")
         for t in trades:
             print(f"  {t.bought.date()} -> {t.sold.date()}  {t.symbol:5} in {t.entry:8.2f} out {t.exit:8.2f} "
                   f"{t.profit:+7.2f}  {t.reason}")
-        by_symbol = pd.Series({sym: sum(t.profit for t in trades if t.symbol == sym) for sym in WATCHLIST})
-        print("\nProfit by stock ($):")
-        print(by_symbol.round(2).to_string())
+        by_symbol = pd.Series({sym: sum(t.profit for t in trades if t.symbol == sym)
+                               for sym in sorted({t.symbol for t in trades})})
+        print("\nProfit by stock ($), best and worst:")
+        ordered = by_symbol.sort_values()
+        print(pd.concat([ordered.head(8), ordered.tail(8)]).round(2).to_string())
 
 
 if __name__ == "__main__":
