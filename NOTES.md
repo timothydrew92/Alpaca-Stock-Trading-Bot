@@ -77,6 +77,8 @@ Several days with no trades is normal: it only buys an uptrending stock that fal
 
 **Raspberry Pi.** The installer is written ([deploy/install_pi.sh](deploy/install_pi.sh)) but has never been run on a real Pi, so expect a snag or two. Needs Raspberry Pi OS "Bookworm" or newer and at least 1 GB of memory. Steps are in the README. Vercel was considered and ruled out: it runs short web requests, not a program that stays up for hours.
 
+**Mac background service.** Not installed. As of 10 Nov 2026 the paper bot was started by hand, so a restart, log-out or crash stops it until `.venv/bin/python bot.py` is run again. Running `./deploy/install_mac.sh` once would make macOS start it at login and restart it after a crash (`./deploy/install_mac.sh remove` undoes it). The script has never been run; because the repo sits in the Desktop folder, macOS may ask for permission or block it. It is paper-only, and it does not help with sleep: a closed lid still stops everything. Cost when running: about 100 MB of memory, near-zero CPU, and the Mac will not idle-sleep while the lid is open, which drains the battery if unplugged.
+
 **Uptime alerts.** The bot can ping a heartbeat monitor so you are alerted if it stops. Create a free check at Healthchecks.io (or a heartbeat monitor in UptimeRobot if the plan includes it), set it to 5 minutes with a 10-minute grace period, and add the link it gives you to `.env.paper` or `.env.live` as `HEARTBEAT_URL=...`. No domain or hosting is needed. On a laptop it will alert every time the lid closes, so it is most useful once the bot is on the Pi.
 
 ## Known weaknesses
