@@ -129,6 +129,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+*.env
 .venv
 env/
 venv/
@@ -169,3 +171,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Swing bot runtime files
+state/
+logs/
+
+# macOS
+.DS_Store
