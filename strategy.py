@@ -43,10 +43,22 @@ def target_level(entry_price: float, s: Settings) -> float | None:
     return entry_price * (1 + s.take_profit_pct)
 
 
-def position_dollars(s: Settings, entry_price: float | None = None, atr: float | None = None) -> float:
-    """Dollars to put into one position: an even split of the budget, shrunk for
-    jumpier stocks when risk_per_trade is set."""
-    size = s.budget / s.max_positions
+def working_budget(s: Settings, realized: float = 0.0) -> float:
+    """Most the bot may have invested at once: the starting budget plus its own
+    realized profit (or minus its losses) when reinvest_profits is on."""
+    if not s.reinvest_profits:
+        return s.budget
+    return max(s.budget + realized, 0.0)
+
+
+def position_dollars(s: Settings, entry_price: float | None = None, atr: float | None = None,
+                     realized: float = 0.0) -> float:
+    """Dollars to put into one position: an even split of the working budget, shrunk
+    for jumpier stocks when risk_per_trade is set. The dollars at risk scale with the
+    working budget, so the risk stays the same percentage as the budget grows or shrinks."""
+    budget = working_budget(s, realized)
+    size = budget / s.max_positions
     if s.risk_per_trade > 0 and s.atr_mult > 0 and atr and entry_price:
-        size = min(size, s.risk_per_trade * entry_price / stop_distance(entry_price, atr, s))
+        risk = s.risk_per_trade * budget / s.budget
+        size = min(size, risk * entry_price / stop_distance(entry_price, atr, s))
     return round(size, 2)

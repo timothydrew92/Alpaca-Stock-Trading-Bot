@@ -30,7 +30,7 @@ The swings in that account afterwards (low $3,912, high $19,220) were just the l
 | Unsettled money | Sale proceeds cannot be spent until the next trading day; if settled cash cannot be confirmed, it does not buy |
 | No exit on losers | Every position has a stop three average daily ranges below the buy price |
 | Winners sold too early | No profit cap; the stop trails behind the peak once a position is up |
-| Over-buying | One position per stock, four at most, about $2 at risk per trade, never more than $100 invested |
+| Over-buying | One position per stock, four at most, about 2% of the budget at risk per trade, never more than the $100 budget plus its own profits invested |
 | Losses piling up | Stops buying permanently after $25 of realized losses |
 | Stale stock list | Rebuilds its own watchlist every week; `MY_PICKS` and `EXCLUDE` in `config.py` override it |
 
@@ -53,12 +53,37 @@ How to read this:
 
 Re-run it any time with `.venv/bin/python backtest.py --compare`.
 
+### Follow-up tests (11 Nov 2026)
+
+The table above used one particular day of the week for rebuilding the watchlist, and that turned out to be the luckiest one. Shifting only the rebuild day gives:
+
+| Period | Worst rebuild day | Average of the five | Best rebuild day |
+|---|---|---|---|
+| 2 years | -26.1% | +6.4% | +29.5% |
+| 1 year | +12.0% | +25.1% | +33.1% |
+| 6 months | -10.0% | -4.6% | +3.7% |
+
+So the fair 2-year figure is about +6%, against +24.5% for the S&P 500 fund. With four positions and $100, a few trades landing differently changes the whole result.
+
+Ideas tested the same way (average of the five rebuild days) and not adopted:
+
+| Idea | Result |
+|---|---|
+| Watch more than 15 stocks | 30 was about the same; 50 or more was worse (2 years +11%, 6 months down to -21%), because the extra names are lower-ranked |
+| Rebuild the watchlist daily | Worse: 2 years -27%, 6 months -8% |
+| Only buy when the S&P 500 is above its 50-day average | Inconsistent: 2 years +27% but 1 year +12% (worse than no filter) |
+| Only buy when the S&P 500 is above its 200-day average | No real difference |
+
+Adopted on 11 Nov 2026 at the owner's request: **profits are reinvested** (`reinvest_profits` in `config.py`). The budget is $100 plus the bot's own realized profit or loss, and the risk per trade stays at 2% of that. In the backtest it made little difference at this size (2 years +1.8% vs +6.4% without, 1 year +27.5% vs +25.1%); it matters more as the account grows.
+
+Not yet built, worth considering later: skipping buys just before a company reports earnings.
+
 ## Judging the paper run
 
 Give it two to four weeks and at least a few completed trades. Judge behaviour, not profit:
 
-1. Every buy is between about $6 and $25, and never more than four positions at once.
-2. Every losing sale is close to $2, apart from overnight gaps.
+1. Every buy is between about $6 and a quarter of the budget ($25 at the start), and never more than four positions at once.
+2. Every losing sale is close to 2% of the budget ($2 at the start), apart from overnight gaps.
 3. It never buys on the same day with money from a sale.
 4. `bot.py --status` always matches the Alpaca dashboard.
 5. The log (`logs/paper.log`) has no repeated errors.

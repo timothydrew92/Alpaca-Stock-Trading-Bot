@@ -132,7 +132,7 @@ def run(bars: dict[str, pd.DataFrame], s: Settings, start: pd.Timestamp,
             entry = min(bar["open"], level) * (1 + SLIPPAGE)
             atr = atrs[symbol].iloc[i - 1]
             atr = None if pd.isna(atr) else float(atr)
-            size = strategy.position_dollars(s, entry, atr)
+            size = strategy.position_dollars(s, entry, atr, realized)
             spendable = cash - (unsettled if s.settled_cash_only else 0.0)
             if spendable < size or size < 1:
                 continue
@@ -233,6 +233,8 @@ def main():
             "deeper dip (3% under low)": replace(s, dip_pct=0.03),
             "full $25 positions (no risk sizing)": replace(s, risk_per_trade=0),
             "no loss limit": replace(s, max_total_loss=1e9),
+            "profits not reinvested" if s.reinvest_profits else "profits reinvested":
+                replace(s, reinvest_profits=not s.reinvest_profits),
         }
         for name, variant in variants.items():
             c, t = run(bars, variant, start, watchlists)

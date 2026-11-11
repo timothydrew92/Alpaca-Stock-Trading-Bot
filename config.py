@@ -29,9 +29,12 @@ SCREEN = ScreenSettings()
 @dataclass(frozen=True)
 class Settings:
     # --- Money ---
-    budget: float = 100.0          # Most the bot will ever have invested at once.
-    max_positions: int = 4         # No more than this many stocks held at once, at most $25 each.
-    risk_per_trade: float = 2.0    # Each position is sized so a normal stop-out loses about $2.
+    budget: float = 100.0          # Starting money the bot may have invested at once.
+    reinvest_profits: bool = True  # Add the bot's own profits to the budget (and take its losses off),
+                                   # so position sizes grow and shrink with results. False = always $100.
+    max_positions: int = 4         # No more than this many stocks held at once, a quarter of the budget each.
+    risk_per_trade: float = 2.0    # Each position is sized so a normal stop-out loses about $2
+                                   # per $100 of budget (2%).
     max_total_loss: float = 25.0   # Bot stops buying for good once its realized losses reach this.
 
     # --- When to buy ---

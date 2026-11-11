@@ -174,7 +174,7 @@ class Bot:
             unsettled = sum(float(f["qty"]) * float(f["price"]) for f in fills if f["side"].startswith("sell"))
             funds -= unsettled
         invested = sum(p["qty"] * p["entry"] for p in self.state["positions"].values())
-        return min(funds, self.s.budget - invested)
+        return min(funds, strategy.working_budget(self.s, self.state["realized"]) - invested)
 
     def symbols_with_open_orders(self) -> set[str]:
         orders = self.trading.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500))
@@ -307,7 +307,7 @@ class Bot:
                 continue
             if now > strategy.entry_level(lv["prev_low"], self.s):
                 continue
-            size = strategy.position_dollars(self.s, now, lv["atr"])
+            size = strategy.position_dollars(self.s, now, lv["atr"], self.state["realized"])
             if size < 1 or cash < size:
                 log.info("%s is at a buy level ($%.2f) but only $%.2f of settled cash is free", symbol, now, max(cash, 0))
                 continue
@@ -346,6 +346,8 @@ class Bot:
         print(f"\n{self.mode.upper()} account: cash ${float(account.cash):,.2f}, equity ${float(account.equity):,.2f}")
         print(f"Bot realized profit so far: ${self.state['realized']:+.2f} "
               f"(stops buying at ${-self.s.max_total_loss:.2f})")
+        print(f"Budget it may invest right now: ${strategy.working_budget(self.s, self.state['realized']):.2f}"
+              + (" (starting budget plus its own profit or loss)" if self.s.reinvest_profits else ""))
         positions = self.state["positions"]
         if not positions:
             print("Bot holds nothing.")

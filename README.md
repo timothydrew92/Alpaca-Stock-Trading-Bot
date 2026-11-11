@@ -99,13 +99,15 @@ All numbers are in [config.py](config.py); the logic is in [strategy.py](strateg
 - Yesterday's close was above its 50-day average (it is in an uptrend).
 - The bot holds fewer than 4 stocks and has settled cash available.
 
-**Position size** is whatever amount would lose about $2 if the stop is hit, capped at $25. Jumpier stocks get smaller positions.
+**Position size** is whatever amount would lose about 2% of the budget ($2 at the start) if the stop is hit, capped at a quarter of the budget ($25 at the start). Jumpier stocks get smaller positions.
+
+**Profits are reinvested.** The budget is the starting $100 plus whatever the bot itself has made, or minus what it has lost, so buys get a little bigger after gains and a little smaller after losses. Set `reinvest_profits = False` in [config.py](config.py) to keep it at a flat $100.
 
 **Sell** when the price falls to the stop. The stop starts three "average daily ranges" below the buy price. Once the price has risen by that same distance, the stop follows that far behind the highest price reached, so gains are kept without capping them.
 
 ## Safety rules
 
-- **Budget cap:** never more than $100 invested at once.
+- **Budget cap:** never more than the starting $100 plus the bot's own profits invested at once. Other money in the account is never touched.
 - **Loss limit:** after $25 of realized losses the bot stops buying permanently.
 - **Settled cash only:** money from a sale is not spent until the next trading day, which avoids good-faith violations in small accounts. If the bot cannot confirm settled cash, it does not buy.
 - **No rebuying after a loss:** a stock sold at a loss is not bought again for 31 days, which avoids IRS wash sales.
