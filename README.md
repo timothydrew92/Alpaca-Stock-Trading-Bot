@@ -103,7 +103,7 @@ All numbers are in [config.py](config.py); the logic is in [strategy.py](strateg
 
 **Profits are reinvested.** The budget is the starting $100 plus whatever the bot itself has made, or minus what it has lost, so buys get a little bigger after gains and a little smaller after losses. Set `reinvest_profits = False` in [config.py](config.py) to keep it at a flat $100.
 
-**Sell** when the price falls to the stop. The stop starts three "average daily ranges" below the buy price. Once the price has risen by that same distance, the stop follows that far behind the highest price reached, so gains are kept without capping them.
+**Sell** when the price is 7% above the buy price (the profit target), or when it falls to the stop, whichever comes first. The stop starts three "average daily ranges" below the buy price. Once the price has risen by that same distance, the stop follows that far behind the highest price reached. Set `take_profit_pct` to 0 to remove the target and let winners run on the trailing stop alone.
 
 ## Safety rules
 

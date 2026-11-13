@@ -45,7 +45,8 @@ class Settings:
     atr_mult: float = 3.0          # Stop-loss sits 3 "average daily ranges" below the buy price, so
                                    # jumpy stocks get more room and calm ones less. Once the price is
                                    # up by that same distance, the stop trails that far behind the peak.
-    take_profit_pct: float = 0.0   # Fixed profit target; 0 = off (the trailing stop takes profits).
+    take_profit_pct: float = 0.07  # Sell once a position is up 7% (quick wins); 0 = off, so only the
+                                   # trailing stop takes profits. Chosen 13 Nov 2026, see NOTES.md.
 
     # Only used if atr_mult is set to 0 (fixed-percent stops instead of volatility-based):
     stop_loss_pct: float = 0.08

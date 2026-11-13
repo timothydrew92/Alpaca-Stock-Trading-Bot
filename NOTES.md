@@ -29,7 +29,7 @@ The swings in that account afterwards (low $3,912, high $19,220) were just the l
 |---|---|
 | Unsettled money | Sale proceeds cannot be spent until the next trading day; if settled cash cannot be confirmed, it does not buy |
 | No exit on losers | Every position has a stop three average daily ranges below the buy price |
-| Winners sold too early | No profit cap; the stop trails behind the peak once a position is up |
+| Winners sold too early | The stop trails behind the peak once a position is up. Since 13 Nov 2026 there is also a +7% profit target, chosen on purpose for quicker trades (see below) |
 | Over-buying | One position per stock, four at most, about 2% of the budget at risk per trade, never more than the $100 budget plus its own profits invested |
 | Losses piling up | Stops buying permanently after $25 of realized losses |
 | Stale stock list | Rebuilds its own watchlist every week; `MY_PICKS` and `EXCLUDE` in `config.py` override it |
@@ -120,3 +120,22 @@ Several days with no trades is normal: it only buys an uptrending stock that fal
 - **Paid market data:** the strategy runs on daily prices, which are free.
 - **Penny stocks:** fractional shares make price irrelevant, and very cheap stocks have worse spreads. The screen's floor is $5.
 - **Rewriting GitHub history:** an old paper key is visible in a January 2025 commit. It has been regenerated and is dead.
+
+### Profit target added (13 Nov 2026)
+
+The owner wants a quick-win bot (trades over days, not weeks), separate from long-term retirement saving. With no target, trades lasted about 19 trading days, so the bot spent most of its time fully invested and waiting.
+
+Profit targets tested with the same method (average of the five rebuild days, worst..best day in brackets), in two separate years and the last 6 months:
+
+| Sell when up | Nov 24 - Nov 25 | Nov 25 - Nov 26 | Last 6 months |
+|---|---|---|---|
+| Never (previous rule) | -10.1% (-19..0) | +23.5% (+6..+48) | -3.8% (-14..+3) |
+| +3% | -12.6% | +39.9% | -10.4% |
+| +5% | -4.3% | +33.9% | -8.2% |
+| **+7% (adopted)** | **+3.9% (-13..+21)** | **+28.8% (+18..+38)** | **-3.7% (-12..+3)** |
+| +10% | -9.3% | +23.7% | -0.6% |
+| S&P 500 fund | +14.1% | +11.2% | +2.4% |
+
+Why +7%: never worse than no target in any period, and nearby targets (5-8%) did about as well, so it is not one lucky number. A +5% target held about 2 days and a +10% about 5 days, so +7% should be a few days. Not adopted because it failed: buying more volatile stocks (wider stops scale with volatility, so trades took just as long and returns fell) and tighter stops (faster but losing). The bot still trailed the S&P 500 fund in two of three periods, so the target improves the rule without proving an edge.
+
+Idea for later, once the budget is bigger: split it into a quick-trade part (with this target) and a longer-hold part (trailing stop only).
